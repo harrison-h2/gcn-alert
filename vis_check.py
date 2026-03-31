@@ -110,6 +110,7 @@ def passes_filters(event) -> bool:
 
 def is_currently_visible(event) -> bool:
     """
+    Return True if the event's sky position is currently above the horizon
     from Greenhill Observatory. No SNR, error, night, moon, or altitude
     constraints — used for the all-alerts channel.
     """
@@ -117,8 +118,11 @@ def is_currently_visible(event) -> bool:
         return False
     target = create_target(event)
     altaz = OBSERVER.altaz(Time.now(), target)
+    return float(altaz.alt.deg) > 0
 
 
+def night_window(t_ref=None):
+    """Return (night_start, night_end) Time objects for the next astronomical night."""
     t_ref = t_ref or Time.now()
     night_start = OBSERVER.twilight_evening_astronomical(t_ref, which="next")
     night_end = OBSERVER.twilight_morning_astronomical(t_ref, which="next")
