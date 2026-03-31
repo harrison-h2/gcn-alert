@@ -22,7 +22,6 @@ from astroplan.constraints import (
     AltitudeConstraint,
     AtNightConstraint,
     MoonSeparationConstraint,
-    GalacticLatitudeConstraint,
     is_observable,
     observability_table,
 )
@@ -30,8 +29,8 @@ from astroplan.plots import plot_airmass
 matplotlib.use("Agg")
 
 __all__ = [
-    "passes_filters", "is_currently_visible", "check_visibility", "plot_visibility",
-    "create_target", "mask_airmass", "fmt_local"
+    "passes_filters", "is_ever_visible", "check_visibility", "plot_visibility",
+    "create_target", "mask_airmass", "fmt_local", "night_window"
 ]
 
 
@@ -51,18 +50,14 @@ OBSERVER = Observer(
 
 # Filter thresholds
 
-MIN_SNR = 4.0  # ignore very weak detections
 MAX_ERROR_DEG = 1.0  # ignore large deg err
 MIN_ALTITUDE = 30.0  # minimum observable altitude (degrees)
 MIN_MOON_SEP = 30.0  # minimum moon separation (degrees)
-MIN_GAL_LAT = 10.0  # minimum galactic latitude (degrees) to avoid galactic plane
-
 # Observability constraints (astroplan handles the maths)
 CONSTRAINTS = [
     AltitudeConstraint(min=MIN_ALTITUDE * u.deg),
     AtNightConstraint.twilight_astronomical(),
     MoonSeparationConstraint(min=MIN_MOON_SEP * u.deg),
-    GalacticLatitudeConstraint(min=MIN_GAL_LAT * u.deg),
 ]
 
 # Helper functions
@@ -104,9 +99,6 @@ def passes_filters(event) -> bool:
     if not event.is_real_observation():
         return False
 
-    if event.snr is not None and event.snr < MIN_SNR:
-        return False
-
     if event.ra_dec_error is not None and event.ra_dec_error > MAX_ERROR_DEG:
         return False
 
@@ -118,15 +110,39 @@ def passes_filters(event) -> bool:
 
 def is_currently_visible(event) -> bool:
     """
-    Return True if the event's sky position is currently above MIN_ALTITUDE
-    from Greenhill Observatory. No night, moon, or galactic constraints —
-    used for the all-alerts channel.
+    from Greenhill Observatory. No SNR, error, night, moon, or altitude
+    constraints — used for the all-alerts channel.
     """
-    if not passes_filters(event):
+    if event.ra is None or event.dec is None:
         return False
     target = create_target(event)
     altaz = OBSERVER.altaz(Time.now(), target)
-    return float(altaz.alt.deg) >= MIN_ALTITUDE
+
+
+    t_ref = t_ref or Time.now()
+    night_start = OBSERVER.twilight_evening_astronomical(t_ref, which="next")
+    night_end = OBSERVER.twilight_morning_astronomical(t_ref, which="next")
+    if night_end < night_start:  # already dark — use now as start
+        night_start = t_ref
+    return night_start, night_end
+
+
+def is_ever_visible(event) -> bool:
+    """
+    Return True if the event's sky position will be above MIN_ALTITUDE
+    at any point during tonight's astronomical night. No moon or other
+    constraints — used for the all-alerts channel.
+    """
+    if event.ra is None or event.dec is None:
+        return False
+
+    night_start, night_end = night_window()
+    target = create_target(event)
+    time_range = Time([night_start, night_end])
+    return is_observable(
+        [AltitudeConstraint(min=MIN_ALTITUDE * u.deg), AtNightConstraint.twilight_astronomical()],
+        OBSERVER, target, time_range=time_range,
+    )[0]
 
 
 def check_visibility(event, obs_time=None):
@@ -141,12 +157,7 @@ def check_visibility(event, obs_time=None):
         return {"is_observable": False, "best_airmass": None, "observable_hours": 0.0,
                 "night_start": None, "night_end": None}
 
-    t_ref = obs_time or Time.now()
-    night_start = OBSERVER.twilight_evening_astronomical(t_ref, which="next")
-    night_end = OBSERVER.twilight_morning_astronomical(t_ref, which="next")
-    if night_end < night_start:  # already dark — use now as start
-        night_start = t_ref
-
+    night_start, night_end = night_window(obs_time)
     time_range = Time([night_start, night_end])
     target = create_target(event)
     base = {"night_start": night_start.iso, "night_end": night_end.iso}

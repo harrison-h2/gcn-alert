@@ -9,7 +9,7 @@ This is the script you need to run:
 
 from gcn_kafka import Consumer
 from event_handle import parse_gcn_message
-from vis_check import passes_filters, is_currently_visible, check_visibility, plot_visibility
+from vis_check import passes_filters, is_ever_visible, check_visibility, plot_visibility
 from alert_discord import send_all_alert, send_filtered_alert, send_retraction_alert
 import warnings
 from astropy.time.core import TimeDeltaMissingUnitWarning
@@ -76,7 +76,7 @@ def main():
 
             # All-alerts webhook real observations currently above the horizon
             # (no SNR / error / moon constraints as long as it is visible in the sky
-            if event.is_real_observation() and is_currently_visible(event):
+            if event.is_real_observation() and is_ever_visible(event):
                 try:
                     send_all_alert(event)
                     print(f"[ALL] {event.source.upper()} {event.instrument} visible above horizon")
