@@ -43,12 +43,12 @@ def main_fields(event):
     ]
 
 
-def make_embed(title, topic, color, fields, footer_suffix=""):
+def make_embed(title, color, fields, topic=None, description=None, footer_suffix=""):
     """Build a Discord embed dictionary object"""
     timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     return {
         "title": title,
-        "description": f"Topic: `{topic}`",
+        "description": description if description is not None else f"Topic: `{topic}`",
         "color": color,
         "fields": fields,
         "footer": {"text": f"Received {timestamp}{footer_suffix}"},
@@ -64,6 +64,18 @@ def post(webhook_url, payload, files=None):
 
     if not resp.ok:
         print(f"[discord] webhook error {resp.status_code}: {resp.text[:200]}")
+
+
+def send_heartbeat_alert():
+    """Send a daily heartbeat to the filtered channel."""
+    embed = make_embed(
+        title       = "Heartbeat",
+        description = "Still active",
+        color       = COLOUR_NEW,
+        fields      = [],
+        footer_suffix = " | Greenhill Observatory",
+    )
+    post(WEBHOOK_FILTERED, {"embeds": [embed]})
 
 
 def send_retraction_alert(event):

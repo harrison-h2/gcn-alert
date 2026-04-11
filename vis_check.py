@@ -34,7 +34,9 @@ __all__ = [
 ]
 
 
-# Observatory 
+# Observatory
+
+TIMEZONE = "Australia/Hobart"
 
 LOCATION = EarthLocation.from_geodetic(
     lon=147.28772 * u.deg,
@@ -45,7 +47,7 @@ LOCATION = EarthLocation.from_geodetic(
 OBSERVER = Observer(
     location=LOCATION,
     name="Greenhill Observatory",
-    timezone="Australia/Hobart",
+    timezone=TIMEZONE,
 )
 
 # Filter thresholds
@@ -215,7 +217,7 @@ def plot_visibility(event, filename_prefix="grb", obs_time=None, window_hours=No
     am_cutoff    = 1.0 / np.sin(np.deg2rad(MIN_ALTITUDE))
 
     time_num  = mdates.date2num(times.datetime)
-    hobart_tz = pytz.timezone("Australia/Hobart")
+    hobart_tz = pytz.timezone(TIMEZONE)
     is_dark   = (times.unix >= night_s.unix) & (times.unix <= night_e.unix)
     edges     = np.where(np.diff(np.concatenate([[False], (target_altaz.alt.deg >= MIN_ALTITUDE) & is_dark, [False]])))[0]
 

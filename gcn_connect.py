@@ -9,9 +9,11 @@ This is the script you need to run:
 
 from gcn_kafka import Consumer
 from event_handle import parse_gcn_message
-from vis_check import passes_filters, is_ever_visible, check_visibility, plot_visibility
-from alert_discord import send_all_alert, send_filtered_alert, send_retraction_alert
+from vis_check import passes_filters, is_ever_visible, check_visibility, plot_visibility, TIMEZONE
+from alert_discord import send_all_alert, send_filtered_alert, send_retraction_alert, send_heartbeat_alert
 import warnings
+import pytz
+from datetime import datetime, date
 from astropy.time.core import TimeDeltaMissingUnitWarning
 from astropy.coordinates.baseframe import NonRotationTransformationWarning
 import os
@@ -54,11 +56,33 @@ def create_consumer():
 
 
 
+HOBART_TZ = pytz.timezone(TIMEZONE)
+HEARTBEAT_HOUR = 17  # 5 pm Hobart time
+
+
 def main():
     consumer = create_consumer()
     print(f"Listening on {len(TOPICS)} topics ...")
 
+    last_heartbeat_date: date | None = None
+
+    try:
+        send_heartbeat_alert()
+        last_heartbeat_date = datetime.now(HOBART_TZ).date()
+        print("[HEARTBEAT] startup heartbeat sent")
+    except Exception as exc:
+        print(f"[discord/heartbeat] {exc}")
+
     while True:
+        now_hobart = datetime.now(HOBART_TZ)
+        if now_hobart.hour >= HEARTBEAT_HOUR and now_hobart.date() != last_heartbeat_date:
+            try:
+                send_heartbeat_alert()
+                last_heartbeat_date = now_hobart.date()
+                print(f"[HEARTBEAT] sent at {now_hobart.strftime('%Y-%m-%d %H:%M %Z')}")
+            except Exception as exc:
+                print(f"[discord/heartbeat] {exc}")
+
         for msg in consumer.consume(timeout=1):
             topic = msg.topic()
             event = parse_gcn_message(topic, msg.value().decode("utf-8"))
