@@ -1,0 +1,16 @@
+name: gcn_alert
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - numpy
+  - matplotlib
+  - pytz
+  - pip
+  - pip:
+      - gcn-kafka
+      - astropy
+      - astroplan
+      - requests
+      - python-dotenv
