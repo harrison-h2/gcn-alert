@@ -98,9 +98,6 @@ def passes_filters(event) -> bool:
     if event.ra == 0.0 and event.dec == 0.0: 
         return False
 
-    if not event.is_real_observation():
-        return False
-
     if event.ra_dec_error is not None and event.ra_dec_error > MAX_ERROR_DEG:
         return False
 

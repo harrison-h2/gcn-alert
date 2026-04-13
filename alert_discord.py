@@ -13,10 +13,9 @@ from dotenv import load_dotenv, dotenv_values
 load_dotenv() 
  
 # colours 
-COLOUR_NEW        = 0x3498DB  
-COLOUR_OBSERVABLE = 0x2ECC71  
-COLOUR_NOT_OBS    = 0xE74C3C  
-COLOUR_RETRACTION = 0xE67E22  
+COLOUR_NEW        = 0x3498DB
+COLOUR_OBSERVABLE = 0x2ECC71
+COLOUR_NOT_OBS    = 0xE74C3C
 
 # Webhook URLs
 WEBHOOK_ALL      = os.getenv("WEBHOOK_ALL")
@@ -76,21 +75,6 @@ def send_heartbeat_alert():
         footer_suffix = " | Greenhill Observatory",
     )
     post(WEBHOOK_FILTERED, {"embeds": [embed]})
-
-
-def send_retraction_alert(event):
-    """Send a retraction notice to both channels"""
-
-    fields = main_fields(event)[:6] 
-    embed = make_embed(
-        title  = f"RETRACTION — {event.source.upper()} / {event.instrument or '?'}",
-        topic  = event.topic,
-        color  = COLOUR_RETRACTION,
-        fields = fields,
-    )
-    payload = {"embeds": [embed]}
-    post(WEBHOOK_ALL, payload)
-    post(WEBHOOK_FILTERED, payload)
 
 
 def send_all_alert(event):

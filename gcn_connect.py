@@ -10,7 +10,7 @@ This is the script you need to run:
 from gcn_kafka import Consumer
 from event_handle import parse_gcn_message
 from vis_check import passes_filters, is_ever_visible, check_visibility, plot_visibility, TIMEZONE
-from alert_discord import send_all_alert, send_filtered_alert, send_retraction_alert, send_heartbeat_alert
+from alert_discord import send_all_alert, send_filtered_alert, send_heartbeat_alert
 import warnings
 import pytz
 from datetime import datetime, date
@@ -89,18 +89,9 @@ def main():
             if event is None:
                 continue
 
-            # Retractions, notify both channels immediately, skip  processing
-            if event.role == "retraction":
-                try:
-                    send_retraction_alert(event)
-                    print(f"[RETRACTION] {event.source.upper()} {event.event_id}")
-                except Exception as exc:
-                    print(f"[discord/retraction] {exc}")
-                continue
-
-            # All-alerts webhook real observations currently above the horizon
+            # All-alerts webhook: observations currently above the horizon
             # (no SNR / error / moon constraints as long as it is visible in the sky
-            if event.is_real_observation() and is_ever_visible(event):
+            if is_ever_visible(event):
                 try:
                     send_all_alert(event)
                     print(f"[ALL] {event.source.upper()} {event.instrument} visible above horizon")

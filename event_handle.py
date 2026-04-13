@@ -28,13 +28,9 @@ class GCNEvent:
     importance: Optional[float] = None
     event_id: Optional[str] = None
     instrument: Optional[str] = None
-    role: str = "observation"
 
     def has_position(self) -> bool:
         return self.ra is not None and self.dec is not None
-
-    def is_real_observation(self) -> bool:
-        return self.role == "observation"
 
     def __str__(self):
         return (
@@ -98,7 +94,6 @@ def parse_einstein_probe(topic: str, value_str: str) -> "GCNEvent":
         ra_dec_error=d.get("ra_dec_error"),
         snr=d.get("image_snr"),
         event_id=(d.get("id") or [None])[0],
-        role="observation",
     )
 
 
@@ -131,7 +126,6 @@ def parse_fermi(topic: str, value_str: str) -> "GCNEvent":
         ra=ra, dec=dec, ra_dec_error=err,
         snr=float(snr_raw) if snr_raw else None,
         importance=importance,
-        role=root.get("role", "observation"),
     )
 
 
@@ -149,7 +143,6 @@ def parse_svom(topic: str, value_str: str) -> "GCNEvent":
         event_id=_group(root, "Svom_Identifiers").get("Burst_Id"),
         ra=ra, dec=dec, ra_dec_error=err,
         snr=float(det["SNR"]) if "SNR" in det else None,
-        role=root.get("role", "observation"),
     )
 
 
