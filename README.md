@@ -70,11 +70,9 @@ Observatory location and filter thresholds are set at the top of `vis_check.py`:
 
 | Filter | Default | Description |
 |---|---|---|
-| `MIN_SNR` | 4.0 | Minimum signal-to-noise ratio |
 | `MAX_ERROR_DEG` | 1.0° | Maximum position error radius |
 | `MIN_ALTITUDE` | 30° | Minimum target altitude |
 | `MIN_MOON_SEP` | 30° | Minimum separation from the Moon |
-| `MIN_GAL_LAT` | 10° | Minimum galactic latitude (avoids galactic plane) |
 
 
   
