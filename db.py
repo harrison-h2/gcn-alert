@@ -18,7 +18,7 @@ from datetime import datetime, timezone, timedelta
 PENDING_RETRY_MINUTES = 20
 MAX_PENDING_ATTEMPTS  = 5
 
-GRB_NAME_RE          = re.compile(r"GRB\s+\d{6}[A-Za-z]+", re.IGNORECASE)
+GRB_NAME_RE          = re.compile(r"GRB\s*\d{6}[A-Za-z]+", re.IGNORECASE)
 TRIGGER_ID_RE        = re.compile(r'trigger[^0-9]*(\d{6,12})', re.IGNORECASE)
 COUNTERPART_KEYWORDS = {"afterglow", "optical", "counterpart", "x-ray", "radio", "infrared"}
 
@@ -267,29 +267,57 @@ def check_counterpart_circular(conn, data: dict) -> dict | None:
     }
 
 
-def insert_circular(conn, data: dict) -> None:
+def _normalize_grb_name(name: str) -> str:
+    return "GRB " + re.sub(r'\s*', '', name).upper()[3:]
+
+
+def insert_circular(conn, data: dict) -> int | None:
+    """Insert circular and return grb_id if linked to a tracked event, else None."""
+    circular_number = data.get("circular_number")
     conn.execute("""
         INSERT OR IGNORE INTO circulars
           (circular_number, subject, received_at, body)
         VALUES (?, ?, ?, ?)
-    """, (data.get("circular_number"), data.get("subject"), data.get("received_at"), data.get("body")))
+    """, (circular_number, data.get("subject"), data.get("received_at"), data.get("body")))
     conn.commit()
 
-    subject = (data.get("subject") or "")
-    body    = (data.get("body") or "")
-    m = GRB_NAME_RE.search(subject) or GRB_NAME_RE.search(body)
-    if not m:
-        return
+    subject  = (data.get("subject") or "")
+    body     = (data.get("body") or "")
+    event_id = (data.get("event_id") or "")
 
-    name = " ".join(m.group(0).upper().split())
+    def _lookup_grb_name(name: str) -> int | None:
+        row = conn.execute("SELECT id FROM grb_events WHERE grb_name = ?",
+                           (_normalize_grb_name(name),)).fetchone()
+        return row["id"] if row else None
 
-    row = conn.execute("SELECT id FROM grb_events WHERE grb_name = ?", (name,)).fetchone()
-    if row:
-        conn.execute(
-            "UPDATE circulars SET grb_id = ? WHERE circular_number = ?",
-            (row["id"], data.get("circular_number"))
-        )
+    def _link_and_return(grb_id: int) -> int:
+        conn.execute("UPDATE circulars SET grb_id = ? WHERE circular_number = ?",
+                     (grb_id, circular_number))
         conn.commit()
+        return grb_id
+
+    if event_id:
+        grb_id = _lookup_grb_name(event_id)
+        if grb_id:
+            return _link_and_return(grb_id)
+
+    m = GRB_NAME_RE.search(subject) or GRB_NAME_RE.search(body)
+    if m:
+        grb_id = _lookup_grb_name(m.group(0))
+        if grb_id:
+            return _link_and_return(grb_id)
+
+    trigger_ids = TRIGGER_ID_RE.findall(body)
+    if trigger_ids:
+        placeholders = ",".join("?" * len(trigger_ids))
+        row = conn.execute(
+            f"SELECT grb_id FROM notices WHERE event_id IN ({placeholders}) AND grb_id IS NOT NULL LIMIT 1",
+            trigger_ids,
+        ).fetchone()
+        if row:
+            return _link_and_return(row["grb_id"])
+
+    return None
 
 
 def cleanup_old_records(conn) -> dict:

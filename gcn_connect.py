@@ -169,8 +169,10 @@ def main():
 
             if topic == "gcn.circulars":
                 try:
-                    data        = parse_circular(topic, raw)
-                    insert_circular(conn, data)
+                    data   = parse_circular(topic, raw)
+                    grb_id = insert_circular(conn, data)
+                    if grb_id is None:
+                        continue  # Not related to any event we track
                     counterpart = check_counterpart_circular(conn, data)
                     print(f"[CIRCULAR] #{data.get('circular_number')} — {(data.get('subject') or '')[:60]}")
                     if counterpart:

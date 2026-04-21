@@ -228,6 +228,7 @@ def parse_circular(topic: str, value_str: str) -> dict:
         "body":            d.get("body"),
         "received_at":     datetime.now(timezone.utc).isoformat(),
         "created_on":      d.get("createdOn"),
+        "event_id":        d.get("eventId"),
     }
 
 
