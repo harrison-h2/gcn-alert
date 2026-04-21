@@ -9,9 +9,8 @@ import json
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timezone
 
-# XML namespace used in VOEvent files
 NS = {"voe": "http://www.ivoa.net/xml/VOEvent/v2.0"}
 
 
@@ -20,6 +19,7 @@ class GCNEvent:
     source: str
     topic: str
     received_at: datetime = field(default_factory=datetime.utcnow)
+    role: str = "observation"
     ra: Optional[float] = None
     dec: Optional[float] = None
     ra_dec_error: Optional[float] = None
@@ -28,6 +28,9 @@ class GCNEvent:
     importance: Optional[float] = None
     event_id: Optional[str] = None
     instrument: Optional[str] = None
+    ivorn: Optional[str] = None           # this event's unique identifier
+    retraction_of: Optional[str] = None  # IVORN cited with cite="retraction"
+    grb_name: Optional[str] = None
 
     def has_position(self) -> bool:
         return self.ra is not None and self.dec is not None
@@ -35,6 +38,7 @@ class GCNEvent:
     def __str__(self):
         return (
             f"[{self.source.upper()}] {self.instrument or '?'} | "
+            f"{self.grb_name + ' | ' if self.grb_name else ''}"
             f"trigger={self.trigger_time} | RA={self.ra} Dec={self.dec} "
             f"±{self.ra_dec_error}° | SNR={self.snr} | ID={self.event_id}"
         )
@@ -53,30 +57,92 @@ def _param(root: ET.Element, name: str) -> Optional[str]:
     return el.get("value") if el is not None else None
 
 
+def _local_tag(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1] if "}" in tag else tag
+
+
 def _group(root: ET.Element, group_name: str) -> dict:
-    """Return all <Param> children of a named <Group> as {name: value}."""
-    group = root.find(f".//*[@name='{group_name}']")
-    if group is None:
-        return {}
-    return {p.get("name"): p.get("value") for p in group}
+    """Return all <Param> children of a named <What/Group> as {name: value} (VOEvent v2.0 What/Group)."""
+    for el in root.iter():
+        if _local_tag(el.tag) != "Group" or el.get("name") != group_name:
+            continue
+        out = {}
+        for p in el:
+            if _local_tag(p.tag) == "Param" and p.get("name") is not None:
+                out[p.get("name")] = p.get("value")
+        return out
+    return {}
 
 
 def _position(root: ET.Element) -> tuple:
-    """Extract (RA, Dec, error_radius) from the VOEvent WhereWhen block."""
-    ra  = root.find(".//C1")
-    dec = root.find(".//C2")
-    err = root.find(".//Error2Radius")
-    return (
-        float(ra.text)  if ra  is not None else None,
-        float(dec.text) if dec is not None else None,
-        float(err.text) if err is not None else None,
-    )
+    """Extract (RA, Dec, error_radius) from WhereWhen (VOEvent v2.0; works with default XML namespace)."""
+    ra = dec = err = None
+    for el in root.iter():
+        t = _local_tag(el.tag)
+        txt = (el.text or "").strip()
+        if not txt:
+            continue
+        if t == "C1" and ra is None:
+            ra = float(txt)
+        elif t == "C2" and dec is None:
+            dec = float(txt)
+        elif t == "Error2Radius" and err is None:
+            err = float(txt)
+    return ra, dec, err
 
 
 def _iso_time(root: ET.Element) -> Optional[str]:
-    el = root.find(".//ISOTime")
-    return el.text if el is not None else None
+    for el in root.iter():
+        if _local_tag(el.tag) == "ISOTime" and el.text and el.text.strip():
+            return el.text.strip()
+    return None
 
+
+def _retraction_of(root: ET.Element) -> Optional[str]:
+    """Return the IVORN cited with cite='retraction', or None."""
+    for el in root.iter():
+        if _local_tag(el.tag) != "EventIVORN":
+            continue
+        if el.get("cite") == "retraction" and el.text and el.text.strip():
+            return el.text.strip()
+    return None
+
+
+def _fermi_importance(root: ET.Element) -> float:
+    """GRB probability from <Why importance> or first <Inference probability> under <Why> (namespaced-safe)."""
+    why = None
+    for el in root.iter():
+        if _local_tag(el.tag) == "Why":
+            why = el
+            break
+    if why is None:
+        for el in root.iter():
+            if _local_tag(el.tag) != "Inference":
+                continue
+            prob = el.get("probability")
+            if prob is not None:
+                return float(prob)
+            break
+        return 0.0
+    imp_attr = why.get("importance")
+    importance = float(imp_attr) if imp_attr is not None else 0.0
+    for ch in why:
+        if _local_tag(ch.tag) != "Inference":
+            continue
+        prob = ch.get("probability")
+        if prob is not None:
+            importance = float(prob)
+        break
+    return importance
+
+
+def _clean_grb_name(name: Optional[str]) -> Optional[str]:
+    if not name:
+        return None
+    name = name.strip().upper()
+    if not name.startswith("GRB"):
+        name = f"GRB {name}"
+    return " ".join(name.split())
 
 
 # Parsers — Einstein Probe (JSON), Fermi & SVOM (VOEvent XML)
@@ -101,12 +167,7 @@ def parse_fermi(topic: str, value_str: str) -> "GCNEvent":
     """Parse a Fermi GBM/LAT VOEvent XML alert."""
     root = _parse_xml(value_str)
 
-    # GRB probability lives on <Why> or its <Inference> child
-    why = root.find(".//Why")
-    importance = float(why.get("importance", 0.0)) if why is not None else 0.0
-    inference = root.find(".//Inference")
-    if inference is not None:
-        importance = float(inference.get("probability", importance))
+    importance = _fermi_importance(root)
 
     ra, dec, err = _position(root)
 
@@ -117,15 +178,21 @@ def parse_fermi(topic: str, value_str: str) -> "GCNEvent":
         or _param(root, "Burst_Signif")
     )
 
+    grb_name_raw = _param(root, "GRB_NAME") or _param(root, "Burst_Name")
+
     return GCNEvent(
         source="fermi",
         topic=topic,
+        role=root.get("role", "observation"),
         instrument="LAT" if "LAT" in topic else "GBM",
         trigger_time=_iso_time(root),
         event_id=_param(root, "TrigID"),
         ra=ra, dec=dec, ra_dec_error=err,
         snr=float(snr_raw) if snr_raw else None,
         importance=importance,
+        ivorn=root.get("ivorn"),
+        retraction_of=_retraction_of(root),
+        grb_name=_clean_grb_name(grb_name_raw),
     )
 
 
@@ -133,18 +200,35 @@ def parse_svom(topic: str, value_str: str) -> "GCNEvent":
     """Parse an SVOM ECLAIRs/GRM/MXT VOEvent XML alert."""
     root = _parse_xml(value_str)
     det  = _group(root, "Detection_Info")
+    ids  = _group(root, "Svom_Identifiers")
     ra, dec, err = _position(root)
 
     return GCNEvent(
         source="svom",
         topic=topic,
+        role=root.get("role", "observation"),
         instrument=_param(root, "Instrument") or topic.split(".")[-1].upper(),
         trigger_time=_iso_time(root),
-        event_id=_group(root, "Svom_Identifiers").get("Burst_Id"),
+        event_id=ids.get("Burst_Id"),
         ra=ra, dec=dec, ra_dec_error=err,
         snr=float(det["SNR"]) if "SNR" in det else None,
+        ivorn=root.get("ivorn"),
+        retraction_of=_retraction_of(root),
+        grb_name=_clean_grb_name(ids.get("Burst_Name")),
     )
 
+
+
+def parse_circular(topic: str, value_str: str) -> dict:
+    """Parse a GCN Circular JSON message."""
+    d = json.loads(value_str)
+    return {
+        "circular_number": d.get("circularId"),
+        "subject":         d.get("subject"),
+        "body":            d.get("body"),
+        "received_at":     datetime.now(timezone.utc).isoformat(),
+        "created_on":      d.get("createdOn"),
+    }
 
 
 # Main entry point

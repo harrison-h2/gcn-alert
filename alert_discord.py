@@ -8,42 +8,43 @@ import json
 import requests
 from datetime import datetime
 import os
-from dotenv import load_dotenv, dotenv_values 
+from dotenv import load_dotenv
 
-load_dotenv() 
- 
-# colours 
+load_dotenv()
+
 COLOUR_NEW        = 0x3498DB
 COLOUR_OBSERVABLE = 0x2ECC71
 COLOUR_NOT_OBS    = 0xE74C3C
 
-# Webhook URLs
-WEBHOOK_ALL      = os.getenv("WEBHOOK_ALL")
-WEBHOOK_FILTERED = os.getenv("WEBHOOK_FILTERED")
+FOOTER_SUFFIX = " | Greenhill Observatory"
 
+WEBHOOK_ALL       = os.getenv("WEBHOOK_ALL")
+WEBHOOK_FILTERED  = os.getenv("WEBHOOK_FILTERED")
+WEBHOOK_HEARTBEAT = os.getenv("WEBHOOK_HEARTBEAT")
+
+
+def _coord(v, prefix=""):
+    return f"{prefix}{v}°" if v is not None else "N/A"
 
 
 def field(name, value, inline=True):
-    """Create a Discord embed field."""
     return {"name": name, "value": value, "inline": inline}
 
 
 def main_fields(event):
-    """Event fields used in every embed"""
     return [
         field("Source",     event.source.upper()),
         field("Instrument", event.instrument or "unknown"),
         field("Event ID",   event.event_id or "N/A"),
         field("Trigger",    event.trigger_time or "N/A"),
-        field("RA",         f"{event.ra}°" if event.ra is not None else "N/A"),
-        field("Dec",        f"{event.dec}°" if event.dec is not None else "N/A"),
-        field("Error",      f"±{event.ra_dec_error}°" if event.ra_dec_error is not None else "N/A"),
+        field("RA",         _coord(event.ra)),
+        field("Dec",        _coord(event.dec)),
+        field("Error",      _coord(event.ra_dec_error, "±")),
         field("SNR",        str(event.snr) if event.snr is not None else "N/A"),
     ]
 
 
 def make_embed(title, color, fields, topic=None, description=None, footer_suffix=""):
-    """Build a Discord embed dictionary object"""
     timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
     return {
         "title": title,
@@ -55,30 +56,81 @@ def make_embed(title, color, fields, topic=None, description=None, footer_suffix
 
 
 def post(webhook_url, payload, files=None):
-    """POST to a Discord webhook."""
+    if not webhook_url:
+        return
     if files:
         resp = requests.post(webhook_url, data={"payload_json": json.dumps(payload)}, files=files, timeout=15)
     else:
         resp = requests.post(webhook_url, json=payload, timeout=15)
-
     if not resp.ok:
         print(f"[discord] webhook error {resp.status_code}: {resp.text[:200]}")
 
 
 def send_heartbeat_alert():
-    """Send a daily heartbeat to the filtered channel."""
-    embed = make_embed(
-        title       = "Heartbeat",
-        description = "Still active",
-        color       = COLOUR_NEW,
-        fields      = [],
-        footer_suffix = " | Greenhill Observatory",
+    if not WEBHOOK_HEARTBEAT:
+        raise RuntimeError("WEBHOOK_HEARTBEAT is not set")
+    embed = make_embed(title="Heartbeat", description="Still active", color=COLOUR_NEW, fields=[], footer_suffix=FOOTER_SUFFIX)
+    post(WEBHOOK_HEARTBEAT, {"embeds": [embed]})
+
+
+def send_daily_summary(summary: dict):
+    if not WEBHOOK_HEARTBEAT:
+        raise RuntimeError("WEBHOOK_HEARTBEAT is not set")
+    top = summary.get("top_event")
+    top_str = (
+        f"{top['event_id']}  RA={top['ra_deg']:.3f}°  Dec={top['dec_deg']:.3f}°  airmass={top['best_airmass']}"
+        if top else "none"
     )
-    post(WEBHOOK_FILTERED, {"embeds": [embed]})
+    by_source_str = ", ".join(f"{k}: {v}" for k, v in summary.get("by_source", {}).items())
+    fields = [
+        field("Total events",      str(summary["total"])),
+        field("By source",         by_source_str or "—"),
+        field("Observable",        str(summary["observable"])),
+        field("Retractions",       str(summary["retractions"])),
+        field("Circulars matched", str(summary["circulars_matched"])),
+        field("Top event",         top_str, inline=False),
+    ]
+    embed = make_embed(
+        title=f"Daily Summary — {summary['date']}",
+        description="Events recorded in the last 24 h",
+        color=COLOUR_NEW,
+        fields=fields,
+        footer_suffix=FOOTER_SUFFIX,
+    )
+    post(WEBHOOK_HEARTBEAT, {"embeds": [embed]})
+
+
+def send_counterpart_alert(info: dict):
+    matched = info.get("matched_notice")
+    fields  = [
+        field("Keywords", ", ".join(info["keywords"])),
+        field("Circular", f"#{info['circular_number']}"),
+    ]
+    if matched:
+        fields += [
+            field("Source",       (matched.get("source") or "?").upper()),
+            field("Instrument",   matched.get("instrument") or "?"),
+            field("Event ID",     matched.get("event_id") or "N/A"),
+            field("Trigger time", matched.get("trigger_time") or "N/A"),
+            field("RA",           _coord(matched.get("ra"))),
+            field("Dec",          _coord(matched.get("dec"))),
+            field("Error",        _coord(matched.get("ra_dec_error"), "±")),
+        ]
+        description = "Matched to a previous notice."
+    else:
+        description = "No matching notice."
+
+    embed = make_embed(
+        title=f"Counterpart Report — {(info['subject'] or '')[:80]}",
+        description=description,
+        color=COLOUR_NEW,
+        fields=fields,
+        footer_suffix=FOOTER_SUFFIX,
+    )
+    post(WEBHOOK_ALL, {"embeds": [embed]})
 
 
 def send_all_alert(event):
-    """Send a basic alert to the all-alerts channel."""
     embed = make_embed(
         title  = f"New Alert — {event.source.upper()} / {event.instrument or '?'}",
         topic  = event.topic,
@@ -89,9 +141,7 @@ def send_all_alert(event):
 
 
 def send_filtered_alert(event, vis, plot_files=None):
-    """Send a detailed alert with visibility info to the filtered channel."""
     observable = vis.get("is_observable", False)
-
     vis_fields = [
         field("Observable",   str(observable)),
         field("Best airmass", str(vis.get("best_airmass", "N/A"))),
@@ -99,13 +149,12 @@ def send_filtered_alert(event, vis, plot_files=None):
         field("Night start",  vis.get("night_start") or "N/A"),
         field("Night end",    vis.get("night_end") or "N/A"),
     ]
-
     embed = make_embed(
         title         = f"Filtered Alert — {event.source.upper()} / {event.instrument or '?'}",
         topic         = event.topic,
         color         = COLOUR_OBSERVABLE if observable else COLOUR_NOT_OBS,
         fields        = main_fields(event) + [field("\u200b", "**Visibility**", inline=False)] + vis_fields,
-        footer_suffix = " | Greenhill Observatory",
+        footer_suffix = FOOTER_SUFFIX,
     )
     payload = {"embeds": [embed]}
 
@@ -113,7 +162,6 @@ def send_filtered_alert(event, vis, plot_files=None):
         post(WEBHOOK_FILTERED, payload)
         return
 
-    # Attach plot images
     files = []
     for i, path in enumerate(plot_files[:10]):
         try:
