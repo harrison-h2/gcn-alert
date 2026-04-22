@@ -49,6 +49,7 @@ OBSERVER = Observer(
     name="Greenhill Observatory",
     timezone=TIMEZONE,
 )
+HOBART_TZ = pytz.timezone(TIMEZONE)
 
 # Filter thresholds
 
@@ -163,7 +164,10 @@ def check_visibility(event, obs_time=None):
     night_start, night_end = night_window(obs_time)
     time_range = Time([night_start, night_end])
     target = create_target(event)
-    base = {"night_start": night_start.iso, "night_end": night_end.iso}
+    base = {
+        "night_start": night_start.to_datetime(timezone=HOBART_TZ).strftime("%Y-%m-%d %H:%M %Z"),
+        "night_end":   night_end.to_datetime(timezone=HOBART_TZ).strftime("%Y-%m-%d %H:%M %Z"),
+    }
 
     # Use the constraints to check observability and calculate observable hours and best airmass during the night
     if not is_observable(CONSTRAINTS, OBSERVER, target, time_range=time_range)[0]:
@@ -214,7 +218,6 @@ def plot_visibility(event, filename_prefix="grb", obs_time=None, window_hours=No
     am_cutoff    = 1.0 / np.sin(np.deg2rad(MIN_ALTITUDE))
 
     time_num  = mdates.date2num(times.datetime)
-    hobart_tz = pytz.timezone(TIMEZONE)
     is_dark   = (times.unix >= night_s.unix) & (times.unix <= night_e.unix)
     edges     = np.where(np.diff(np.concatenate([[False], (target_altaz.alt.deg >= MIN_ALTITUDE) & is_dark, [False]])))[0]
 
@@ -235,7 +238,7 @@ def plot_visibility(event, filename_prefix="grb", obs_time=None, window_hours=No
         ax_top = ax.twiny()
         ax_top.set_xlim(ax.get_xlim())
         ax_top.set_xticks(time_value)
-        ax_top.set_xticklabels([fmt_local(t, hobart_tz) for t in time_value])
+        ax_top.set_xticklabels([fmt_local(t, HOBART_TZ) for t in time_value])
         ax_top.set_xlabel("Hobart Local Time")
 
     def make_plot(target_data, moon_data, y_limit, path, ylabel=None, ylim=None, yfmt=None):
