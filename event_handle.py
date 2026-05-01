@@ -18,7 +18,7 @@ NS = {"voe": "http://www.ivoa.net/xml/VOEvent/v2.0"}
 class GCNEvent:
     source: str
     topic: str
-    received_at: datetime = field(default_factory=datetime.utcnow)
+    received_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     role: str = "observation"
     ra: Optional[float] = None
     dec: Optional[float] = None
@@ -219,7 +219,7 @@ def parse_svom(topic: str, value_str: str) -> "GCNEvent":
 
 
 
-def parse_circular(topic: str, value_str: str) -> dict:
+def parse_circular(value_str: str) -> dict:
     """Parse a GCN Circular JSON message."""
     d = json.loads(value_str)
     return {

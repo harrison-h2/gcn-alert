@@ -57,11 +57,11 @@ MAX_ERROR_DEG = 1.0  # ignore large deg err
 MIN_ALTITUDE = 30.0  # minimum observable altitude (degrees)
 MIN_MOON_SEP = 30.0  # minimum moon separation (degrees)
 # Observability constraints (astroplan handles the maths)
-CONSTRAINTS = [
+BASIC_CONSTRAINTS = [
     AltitudeConstraint(min=MIN_ALTITUDE * u.deg),
     AtNightConstraint.twilight_astronomical(),
-    MoonSeparationConstraint(min=MIN_MOON_SEP * u.deg),
 ]
+CONSTRAINTS = BASIC_CONSTRAINTS + [MoonSeparationConstraint(min=MIN_MOON_SEP * u.deg)]
 
 # Helper functions
 
@@ -108,19 +108,6 @@ def passes_filters(event) -> bool:
 # Visibility
 
 
-def is_currently_visible(event) -> bool:
-    """
-    Return True if the event's sky position is currently above the horizon
-    from Greenhill Observatory. No SNR, error, night, moon, or altitude
-    constraints — used for the all-alerts channel.
-    """
-    if event.ra is None or event.dec is None:
-        return False
-    target = create_target(event)
-    altaz = OBSERVER.altaz(Time.now(), target)
-    return float(altaz.alt.deg) > 0
-
-
 def night_window(t_ref=None):
     """Return (night_start, night_end) Time objects for the next astronomical night."""
     t_ref = t_ref or Time.now()
@@ -143,10 +130,7 @@ def is_ever_visible(event) -> bool:
     night_start, night_end = night_window()
     target = create_target(event)
     time_range = Time([night_start, night_end])
-    return is_observable(
-        [AltitudeConstraint(min=MIN_ALTITUDE * u.deg), AtNightConstraint.twilight_astronomical()],
-        OBSERVER, target, time_range=time_range,
-    )[0]
+    return is_observable(BASIC_CONSTRAINTS, OBSERVER, target, time_range=time_range)[0]
 
 
 def check_visibility(event, obs_time=None):
@@ -159,7 +143,7 @@ def check_visibility(event, obs_time=None):
     """
     if not passes_filters(event):
         return {"is_observable": False, "best_airmass": None, "observable_hours": 0.0,
-                "night_start": None, "night_end": None}
+                "moon_separation": None, "night_start": None, "night_end": None}
 
     night_start, night_end = night_window(obs_time)
     time_range = Time([night_start, night_end])
@@ -169,9 +153,16 @@ def check_visibility(event, obs_time=None):
         "night_end":   night_end.to_datetime(timezone=HOBART_TZ).strftime("%Y-%m-%d %H:%M %Z"),
     }
 
+    mid = night_start + (night_end - night_start) * 0.5
+    moon = get_body("moon", mid, location=LOCATION)
+    target_coord = OBSERVER.altaz(mid, target)
+    moon_coord   = OBSERVER.altaz(mid, moon)
+    moon_sep = round(float(target_coord.separation(moon_coord).deg), 1)
+
     # Use the constraints to check observability and calculate observable hours and best airmass during the night
     if not is_observable(CONSTRAINTS, OBSERVER, target, time_range=time_range)[0]:
-        return {"is_observable": False, "best_airmass": None, "observable_hours": 0.0, **base}
+        return {"is_observable": False, "best_airmass": None, "observable_hours": 0.0,
+                "moon_separation": moon_sep, **base}
 
     night_hours = (night_end - night_start).to(u.hour).value
     frac = float(observability_table(CONSTRAINTS, OBSERVER, [target], time_range=time_range)
@@ -183,7 +174,8 @@ def check_visibility(event, obs_time=None):
     above = altaz.alt.deg >= MIN_ALTITUDE
     best_airmass = round(float(np.min(altaz.secz[above])), 2) if np.any(above) else None
 
-    return {"is_observable": True, "best_airmass": best_airmass, "observable_hours": obs_hours, **base}
+    return {"is_observable": True, "best_airmass": best_airmass, "observable_hours": obs_hours,
+            "moon_separation": moon_sep, **base}
 
 
 # Plotting
@@ -204,10 +196,7 @@ def plot_visibility(event, filename_prefix="grb", obs_time=None, window_hours=No
         f"RA {event.ra:.4f}°,  Dec {event.dec:+.4f}°"
     )
 
-    night_s = OBSERVER.twilight_evening_astronomical(t_start, which="next")
-    night_e = OBSERVER.twilight_morning_astronomical(t_start, which="next")
-    if night_e < night_s:
-        night_e = OBSERVER.twilight_morning_astronomical(night_s, which="next")
+    night_s, night_e = night_window(t_start)
 
     target_altaz = OBSERVER.altaz(times, target)
     moon_altaz   = OBSERVER.altaz(times, get_body("moon", times, location=LOCATION))

@@ -9,12 +9,11 @@ This is the script you need to run:
 
 import json
 import warnings
-import pytz
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from gcn_kafka import Consumer
 from event_handle import parse_gcn_message, parse_circular, GCNEvent
 from colibri import lookup_grb_name
-from vis_check import passes_filters, is_ever_visible, check_visibility, plot_visibility, TIMEZONE
+from vis_check import passes_filters, is_ever_visible, check_visibility, plot_visibility, HOBART_TZ
 from alert_discord import (send_all_alert, send_filtered_alert, send_heartbeat_alert,
                            send_daily_summary, send_counterpart_alert)
 from db import (init_db, insert_notice, insert_circular, daily_summary, cleanup_old_records,
@@ -59,7 +58,6 @@ def create_consumer():
     return consumer
 
 
-HOBART_TZ      = pytz.timezone(TIMEZONE)
 HEARTBEAT_HOUR = 17
 PENDING_CHECK_INTERVAL = 60
 
@@ -74,20 +72,18 @@ _PENDING_RETRY_SCHEDULE = [
 
 
 def _next_5pm_hobart() -> str:
-    from datetime import timezone as _tz
     now = datetime.now(HOBART_TZ)
     target = now.replace(hour=HEARTBEAT_HOUR, minute=0, second=0, microsecond=0)
     if now >= target:
         target += timedelta(days=1)
-    return target.astimezone(_tz.utc).isoformat()
+    return target.astimezone(timezone.utc).isoformat()
 
 
 def _retry_after_for_attempt(attempt: int) -> str:
-    from datetime import timezone as _tz
     delta = _PENDING_RETRY_SCHEDULE[attempt]
     if delta is None:
         return _next_5pm_hobart()
-    return (datetime.now(_tz.utc) + delta).isoformat()
+    return (datetime.now(timezone.utc) + delta).isoformat()
 
 
 def _promote_from_pending(conn, pending: dict, grb_name: str, magnitude: float = None):
@@ -127,8 +123,8 @@ def main():
         now_hobart = datetime.now(HOBART_TZ)
 
         if now_hobart.hour >= HEARTBEAT_HOUR:
-            today_str = now_hobart.strftime("%Y-%m-%d")
             if last_daily_summary_date != now_hobart.date():
+                today_str = now_hobart.strftime("%Y-%m-%d")
                 try:
                     send_daily_summary(daily_summary(conn, today_str))
                     last_daily_summary_date = now_hobart.date()
@@ -169,7 +165,7 @@ def main():
 
             if topic == "gcn.circulars":
                 try:
-                    data   = parse_circular(topic, raw)
+                    data   = parse_circular(raw)
                     grb_id = insert_circular(conn, data)
                     if grb_id is None:
                         continue  # Not related to any event we track

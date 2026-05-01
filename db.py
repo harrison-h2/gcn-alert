@@ -406,6 +406,15 @@ def daily_summary(conn, date_str: str) -> dict:
     }
 
 
+def get_circulars_for_grb_name(conn, grb_name: str) -> list:
+    """Return circulars whose subject or body mention grb_name."""
+    rows = conn.execute(
+        "SELECT * FROM circulars WHERE subject LIKE ? OR body LIKE ? ORDER BY circular_number DESC",
+        (f"%{grb_name}%", f"%{grb_name}%"),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def query_grb(conn, grb_name: str) -> dict | None:
     normalised = " ".join(grb_name.upper().split())
     event_row = conn.execute("SELECT * FROM grb_events WHERE grb_name = ?", (normalised,)).fetchone()
