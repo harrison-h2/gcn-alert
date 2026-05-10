@@ -6,7 +6,7 @@ Send GCN alerts to Discord with webhooks.
 
 import json
 import requests
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 from dotenv import load_dotenv
 
@@ -45,10 +45,10 @@ def main_fields(event):
 
 
 def make_embed(title, color, fields, topic=None, description=None, footer_suffix=""):
-    timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     return {
         "title": title,
-        "description": description if description is not None else f"Topic: `{topic}`",
+        "description": description if description is not None else f"Topic: `{topic or '?'}`",
         "color": color,
         "fields": fields,
         "footer": {"text": f"Received {timestamp}{footer_suffix}"},
@@ -142,12 +142,21 @@ def send_all_alert(event):
 
 def send_filtered_alert(event, vis, plot_files=None):
     observable = vis.get("is_observable", False)
+    moon_sep = vis.get("moon_separation")
+    altitude = vis.get("altitude_summary") or {}
+    altitude_times = [
+        f"20 deg: {altitude.get('20_deg_time', 'N/A')}",
+        f"50 deg: {altitude.get('50_deg_time', 'N/A')}",
+        f"Peak: {altitude.get('peak_altitude', 'N/A')} deg at {altitude.get('peak_time', 'N/A')}",
+    ]
     vis_fields = [
-        field("Observable",   str(observable)),
-        field("Best airmass", str(vis.get("best_airmass", "N/A"))),
-        field("Obs window",   f"{vis.get('observable_hours', 0.0)} h"),
-        field("Night start",  vis.get("night_start") or "N/A"),
-        field("Night end",    vis.get("night_end") or "N/A"),
+        field("Observable",      str(observable)),
+        field("Best airmass",    str(vis.get("best_airmass", "N/A"))),
+        field("Obs window",      f"{vis.get('observable_hours', 0.0)} h"),
+        field("Altitude times",  "\n".join(altitude_times), inline=False),
+        field("Moon separation", f"{moon_sep}°" if moon_sep is not None else "N/A"),
+        field("Night start",     vis.get("night_start") or "N/A"),
+        field("Night end",       vis.get("night_end") or "N/A"),
     ]
     embed = make_embed(
         title         = f"Filtered Alert — {event.source.upper()} / {event.instrument or '?'}",

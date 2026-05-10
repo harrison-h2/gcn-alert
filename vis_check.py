@@ -85,6 +85,39 @@ def fmt_local(time_value, tz):
         return ""
 
 
+def format_time(time_value):
+    return time_value.to_datetime(timezone=HOBART_TZ).strftime("%Y-%m-%d %H:%M %Z")
+
+
+def altitude_summary(times, altitudes):
+    """Return altitude timing values for the filtered alert."""
+    summary = {}
+    for threshold in (20, 50):
+        above = altitudes >= threshold
+        if not np.any(above):
+            summary[f"{threshold}_deg_time"] = "N/A"
+            continue
+
+        first_idx = int(np.argmax(above))
+        if first_idx == 0:
+            crossing = times[first_idx]
+        else:
+            prev_alt = altitudes[first_idx - 1]
+            next_alt = altitudes[first_idx]
+            if next_alt == prev_alt:
+                crossing = times[first_idx]
+            else:
+                frac = float((threshold - prev_alt) / (next_alt - prev_alt))
+                crossing = times[first_idx - 1] + (times[first_idx] - times[first_idx - 1]) * frac
+
+        summary[f"{threshold}_deg_time"] = format_time(crossing)
+
+    peak_idx = int(np.nanargmax(altitudes))
+    summary["peak_altitude"] = round(float(altitudes[peak_idx]), 1)
+    summary["peak_time"] = format_time(times[peak_idx])
+    return summary
+
+
 # Filtering
 
 
@@ -143,7 +176,8 @@ def check_visibility(event, obs_time=None):
     """
     if not passes_filters(event):
         return {"is_observable": False, "best_airmass": None, "observable_hours": 0.0,
-                "moon_separation": None, "night_start": None, "night_end": None}
+                "moon_separation": None, "night_start": None, "night_end": None,
+                "altitude_summary": {}}
 
     night_start, night_end = night_window(obs_time)
     time_range = Time([night_start, night_end])
@@ -159,23 +193,29 @@ def check_visibility(event, obs_time=None):
     moon_coord   = OBSERVER.altaz(mid, moon)
     moon_sep = round(float(target_coord.separation(moon_coord).deg), 1)
 
-    # Use the constraints to check observability and calculate observable hours and best airmass during the night
+    peak_start = night_start - 12 * u.hour
+    peak_times = peak_start + (night_end - peak_start) * np.linspace(0, 1, 400)
+    peak_altaz = OBSERVER.altaz(peak_times, target)
+    altitude_info = altitude_summary(peak_times, peak_altaz.alt.deg)
+
+    # Use the constraints to check observability and calculate observable hours and best airmass during the night.
+    times = night_start + (night_end - night_start) * np.linspace(0, 1, 200)
+    altaz = OBSERVER.altaz(times, target)
+
     if not is_observable(CONSTRAINTS, OBSERVER, target, time_range=time_range)[0]:
         return {"is_observable": False, "best_airmass": None, "observable_hours": 0.0,
-                "moon_separation": moon_sep, **base}
+                "moon_separation": moon_sep, "altitude_summary": altitude_info, **base}
 
     night_hours = (night_end - night_start).to(u.hour).value
     frac = float(observability_table(CONSTRAINTS, OBSERVER, [target], time_range=time_range)
                  ["fraction of time observable"][0])
     obs_hours = round(frac * night_hours, 2)
 
-    times = night_start + (night_end - night_start) * np.linspace(0, 1, 200)
-    altaz = OBSERVER.altaz(times, target)
     above = altaz.alt.deg >= MIN_ALTITUDE
     best_airmass = round(float(np.min(altaz.secz[above])), 2) if np.any(above) else None
 
     return {"is_observable": True, "best_airmass": best_airmass, "observable_hours": obs_hours,
-            "moon_separation": moon_sep, **base}
+            "moon_separation": moon_sep, "altitude_summary": altitude_info, **base}
 
 
 # Plotting

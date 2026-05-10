@@ -3,6 +3,15 @@ add_event.py
 
 Manually add a known GRB/transient event to the database and send a Discord alert.
 
+Usage:
+    # Provide final event name and coordinates manually
+    python add_event.py --event GRB250501A --ra 120.5 --dec -15.3
+
+    # Let Astro-COLIBRI resolve coords from an official event name
+    python add_event.py --event AT2026lru
+
+    # Let Astro-COLIBRI resolve official name + coords from a trigger/name
+    python add_event.py --trigger 754610296
 """
 
 import argparse
@@ -24,129 +33,92 @@ def _normalize_name(name: str) -> str:
     return name.strip()
 
 
-def _parse_coords_from_text(text: str):
-    """Extract decimal RA/Dec from a GCN circular body. Returns (ra, dec) or (None, None)."""
-    dec_m = re.search(r'Dec\b[^\n]*\(=?\s*([-+]?[0-9]{1,2}\.[0-9]{1,6})\s*deg', text, re.IGNORECASE)
-    if ra_m and dec_m:
-        return float(ra_m.group(1)), float(dec_m.group(1))
-
-    if ra_m and dec_m:
-        return float(ra_m.group(1)), float(dec_m.group(1))
-
-    return None, None
-
-
-def _coords_from_circulars(conn, grb_name: str):
-    """Search local circulars DB for coordinates matching grb_name."""
-    circulars = db.get_circulars_for_grb_name(conn, grb_name)
-    for circ in circulars:
-        body = circ.get('body') or ''
-        ra, dec = _parse_coords_from_text(body)
-        if ra is not None and dec is not None:
-            print(f"[add_event] Coordinates found in circular #{circ.get('circular_number')}")
-            return ra, dec
-    return None, None
-
-
-def _coords_from_simbad(grb_name: str):
-    """Query SIMBAD for coordinates by name. Returns (ra, dec) or (None, None)."""
-    try:
-        from astroquery.simbad import Simbad
-        from astropy.coordinates import SkyCoord
-        import astropy.units as u
-    except ImportError:
-        return None, None
-
-    try:
-        result = Simbad.query_object(grb_name)
-        if result is None or len(result) == 0:
-            return None, None
-        coord = SkyCoord(ra=result['RA'][0], dec=result['DEC'][0], unit=(u.hourangle, u.deg), frame='icrs')
-        return round(float(coord.ra.deg), 5), round(float(coord.dec.deg), 5)
-    except Exception as e:
-        print(f"[add_event] SIMBAD lookup failed: {e}")
-        return None, None
-
-
-def resolve(args, conn):
-    """Resolve grb_name, ra, dec from CLI args. Returns (grb_name, ra, dec, magnitude)."""
-    grb_name  = _normalize_name(args.grb) if args.grb else None
-    ra        = args.ra
-    dec       = args.dec
+def resolve(args):
+    """Resolve event name, ra, dec from CLI args. Returns (event_name, ra, dec, magnitude)."""
+    event_name = _normalize_name(args.event) if args.event else None
+    ra         = args.ra
+    dec        = args.dec
     magnitude = None
 
-    # Coords provided directly — no network call needed
-    if ra is not None and dec is not None:
-        if grb_name is None:
-            print("[add_event] Error: --grb is required when providing --ra/--dec manually")
-            sys.exit(1)
-        return grb_name, ra, dec, magnitude
+    if event_name and ra is not None and dec is not None:
+        return event_name, ra, dec, magnitude
 
-    # Trigger ID → query Colibri for name + coords
-    if args.trigger_id:
-        print(f"[add_event] Querying AstroColibri for trigger {args.trigger_id}...")
-        details = colibri.lookup_event_details(args.trigger_id)
-        if grb_name is None:
-            grb_name = _normalize_name(details['name']) if details['name'] else _normalize_name(args.trigger_id)
-        if details['ra'] is not None and details['dec'] is not None:
-            ra, dec = details['ra'], details['dec']
-            print(f"[add_event] Colibri returned RA={ra} Dec={dec}")
-        else:
-            print("[add_event] Colibri did not return coordinates for this trigger ID")
+    if event_name:
+        print(f"[add_event] Querying Astro-COLIBRI for event {event_name}...")
+        details = colibri.lookup_event_details(event_name, query_param="source_name")
+        ra, dec = details['ra'], details['dec']
         magnitude = details.get('magnitude')
 
-    if grb_name is None:
-        print("[add_event] Error: could not determine GRB name. Provide --grb or a valid --trigger-id")
-        sys.exit(1)
+        if details['name']:
+            event_name = _normalize_name(details['name'])
+            print(f"[add_event] Astro-COLIBRI returned name {event_name}")
 
-    if ra is None or dec is None:
-        print(f"[add_event] Searching local circulars for {grb_name}...")
-        ra, dec = _coords_from_circulars(conn, grb_name)
+        if ra is not None and dec is not None:
+            print(f"[add_event] Astro-COLIBRI returned RA={ra} Dec={dec}")
+        else:
+            print("[add_event] Astro-COLIBRI did not return coordinates for this event")
 
-    if ra is None or dec is None:
-        # Try SIMBAD
-        print(f"[add_event] Trying SIMBAD for {grb_name}...")
-        ra, dec = _coords_from_simbad(grb_name)
-        if ra is not None:
-            print(f"[add_event] SIMBAD returned RA={ra} Dec={dec}")
+    if args.trigger:
+        print(f"[add_event] Querying Astro-COLIBRI for trigger {args.trigger}...")
+        details = colibri.lookup_event_details(args.trigger)
+        event_name = _normalize_name(details['name']) if details['name'] else None
+        ra, dec = details['ra'], details['dec']
+        magnitude = details.get('magnitude')
 
-    if ra is None or dec is None:
+        if event_name:
+            print(f"[add_event] Astro-COLIBRI returned name {event_name}")
+        else:
+            print("[add_event] Astro-COLIBRI did not return an official event name")
+
+        if ra is not None and dec is not None:
+            print(f"[add_event] Astro-COLIBRI returned RA={ra} Dec={dec}")
+        else:
+            print("[add_event] Astro-COLIBRI did not return coordinates for this trigger")
+
+    if event_name is None or ra is None or dec is None:
         print(
-            f"[add_event] Error: could not find coordinates for {grb_name}.\n"
-            "Provide --ra and --dec, or --trigger-id to fetch from AstroColibri."
+            "[add_event] Error: could not resolve an official event name and coordinates.\n"
+            "Use --trigger for Astro-COLIBRI lookup, or --event with --ra and --dec for a manual override."
         )
         sys.exit(1)
 
-    return grb_name, ra, dec, magnitude
+    return event_name, ra, dec, magnitude
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Manually add a GRB event to the database and send a Discord alert")
-    parser.add_argument('--grb',        help='GRB name, e.g. GRB250501A')
-    parser.add_argument('--trigger-id', dest='trigger_id', help='AstroColibri trigger ID')
-    parser.add_argument('--ra',         type=float, help='Right ascension in degrees')
-    parser.add_argument('--dec',        type=float, help='Declination in degrees')
-    parser.add_argument('--error',      type=float, default=0.0, help='Position error radius in degrees (default: 0.0)')
+    parser = argparse.ArgumentParser(description="Manually add a GRB/transient event to the database and send a Discord alert")
+    parser.add_argument('--trigger', help='Astro-COLIBRI trigger or unresolved event name to resolve')
+    parser.add_argument('--event',   help='Official event name to resolve, or final event name for manual coordinate override')
+    parser.add_argument('--ra',      type=float, help='Right ascension in degrees for manual override')
+    parser.add_argument('--dec',     type=float, help='Declination in degrees for manual override')
+    parser.add_argument('--error',   type=float, default=0.0, help='Position error radius in degrees (default: 0.0)')
     args = parser.parse_args()
 
-    if not args.grb and not args.trigger_id:
-        parser.error("Provide at least --grb or --trigger-id")
+    has_manual_coords = args.ra is not None or args.dec is not None
+    if args.trigger and (args.event or has_manual_coords):
+        parser.error("--trigger cannot be combined with --event, --ra, or --dec")
+    if has_manual_coords and not args.event:
+        parser.error("--ra and --dec require --event")
+    if args.event and ((args.ra is None) != (args.dec is None)):
+        parser.error("Manual override requires both --ra and --dec")
+    if not args.trigger and not args.event:
+        parser.error("Provide --trigger, or --event with --ra and --dec")
 
     conn = db.init_db()
-    grb_name, ra, dec, magnitude = resolve(args, conn)
+    event_name, ra, dec, magnitude = resolve(args)
 
     event = GCNEvent(
         source      = "Manually Added",
         topic       = "manual",
-        grb_name    = grb_name,
-        event_id    = grb_name,
+        grb_name    = event_name,
+        event_id    = event_name,
         ra          = ra,
         dec         = dec,
         ra_dec_error= args.error,
         received_at = datetime.now(timezone.utc),
     )
 
-    print(f"\n--- {grb_name} ---")
+    print(f"\n--- {event_name} ---")
     print(f"  RA={ra}°  Dec={dec}°  error=±{args.error}°")
 
     print("[add_event] Checking visibility...")
@@ -159,10 +131,10 @@ def main():
     print(f"  Night end:     {vis.get('night_end', 'N/A')}")
 
     db.promote_to_grb_event(conn, event, vis, magnitude)
-    print(f"[add_event] Stored {grb_name} in grb_events")
+    print(f"[add_event] Stored {event_name} in grb_events")
 
     print("[add_event] Generating visibility plots...")
-    plot_files = plot_visibility(event, filename_prefix=grb_name.replace(' ', '_'))
+    plot_files = plot_visibility(event, filename_prefix=event_name.replace(' ', '_'))
 
     print("[add_event] Sending Discord alert...")
     from alert_discord import send_filtered_alert
